@@ -28,6 +28,10 @@ class ComposerStaticInitfab9cf9a63cc365feaef40f6f2b1aa72
             'Slim\\Http\\' => 10,
             'Slim\\' => 5,
         ),
+        'R' => 
+        array (
+            'Rakit\\Validation\\' => 17,
+        ),
         'P' => 
         array (
             'Psr\\Log\\' => 8,
@@ -81,6 +85,10 @@ class ComposerStaticInitfab9cf9a63cc365feaef40f6f2b1aa72
         'Slim\\' => 
         array (
             0 => __DIR__ . '/..' . '/slim/slim/Slim',
+        ),
+        'Rakit\\Validation\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/rakit/validation/src',
         ),
         'Psr\\Log\\' => 
         array (
