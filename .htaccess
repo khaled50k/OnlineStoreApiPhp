@@ -1,9 +1,0 @@
-RewriteEngine On
-RewriteBase /e-commerce-php/
-
-# Redirect /token.php to /token/
-RewriteCond %{THE_REQUEST} ^GET\ /e-commerce-php/token\.php [NC]
-RewriteRule ^token\.php$ /e-commerce-php/token/ [L,R=301]
-
-# Rewrite /token/ to /token.php
-RewriteRule ^token/$ /e-commerce-php/token.php [L]
