@@ -3,6 +3,8 @@
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Slim\Psr7\Response;
+use Slim\Routing\RouteContext;
+
 
 include '../token.php';
 
@@ -59,10 +61,14 @@ class verifyTokenAndAuthorization
 {
     public function __invoke(Request $request, RequestHandler $handler): Response
     {
+        $routeContext = RouteContext::fromRequest($request);
+        $route = $routeContext->getRoute();
+        $args = $route->getArguments();
         $cookies = $request->getCookieParams();
         $token = $cookies['SESSION'] ?? null;
         $queryParams = $request->getQueryParams();
-        $userId = $queryParams['id'] ?? null;
+        $userId = $queryParams['userid'] ?$queryParams['userid'] :$args['user_id'];
+   echo $userId;
 
         if (!$token) {
             $response = new Response();

@@ -139,8 +139,8 @@ return function (App $app) use ($pdo) {
 
         })->add(verifyTokenAndAdmin::class);
 
-        $app->get('', function (Request $request, Response $response, $next) use ($pdo) {
-            $userId = $request->getAttribute('userId');
+        $app->get('/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
+            $userId = $args['user_id'];
             $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
             $stmt->execute([$userId]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -241,12 +241,34 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAuthorization::class);
         $app->delete('/', function (Request $request, Response $response, $next) use ($pdo) {
             $userId = $request->getAttribute('userId');
-            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
-            $stmt->execute([$userId]);
+
+            // Get the cart ID of the user
+            $stmt = $pdo->prepare("SELECT id FROM carts WHERE user_id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
+            $cartId = $stmt->fetchColumn();
+
+            // Return the item product quantity to the product stock
+            $stmt = $pdo->prepare("UPDATE products p
+                                   JOIN cart_items ci ON p.id = ci.product_id
+                                   SET p.stock = p.stock + ci.quantity
+                                   WHERE ci.cart_id = :cart_id");
+            $stmt->execute(['cart_id' => $cartId]);
+
+            // Delete the user's cart items
+            $stmt = $pdo->prepare("DELETE FROM cart_items WHERE cart_id = :cart_id");
+            $stmt->execute(['cart_id' => $cartId]);
+
+            // Delete the user's cart
+            $stmt = $pdo->prepare("DELETE FROM carts WHERE id = :cart_id");
+            $stmt->execute(['cart_id' => $cartId]);
+
+            // Delete the user
+            $stmt = $pdo->prepare("DELETE FROM users WHERE id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
 
             if ($stmt->rowCount() > 0) {
                 $message = [
-                    'message' => 'User  deleted successfully'
+                    'message' => 'User deleted successfully'
                 ];
                 $responseBody = json_encode($message);
                 $response = $response->withHeader('Content-Type', 'application/json');
@@ -258,17 +280,11 @@ return function (App $app) use ($pdo) {
                 'message' => 'User not found or deletion failed'
             ];
             $responseBody = json_encode($message);
-
             $response = $response->withHeader('Content-Type', 'application/json');
             $response = $response->withStatus(404);
             $response->getBody()->write($responseBody);
             return $response;
-
-            // Set headers to indicate JSON response
-
-
         })->add(verifyTokenAndAuthorization::class);
-
 
 
         // Add more routes for the users endpoint
@@ -815,7 +831,7 @@ return function (App $app) use ($pdo) {
                         'cart_id' => $cartId,
                         'user_id' => $userId,
                         'product_id' => $productId,
-                        'quantity' => $newquantity
+                        'quantity' => $quantity
                     ]);
                 }
 
@@ -857,7 +873,7 @@ return function (App $app) use ($pdo) {
             return $response;
         })->add(verifyTokenAndAuthorization::class);
 
-        $app->put('/cart/{cart_id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
+        $app->put('/{cart_id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
             $cartId = $args['cart_id'];
             $requestBody = json_decode($request->getBody()->getContents(), true);
 
@@ -913,14 +929,14 @@ return function (App $app) use ($pdo) {
                     $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
                     $stmt->execute(['product_id' => $productId]);
                     $currentStock = $stmt->fetchColumn();
-// -20 -40=-60+160
+                    // -20 -40=-60+160
 // -20
 
-// 160 -20
+                    // 160 -20
 // 20 -40 = -20
 // 20
                     // Calculate the difference between the new quantity and the current quantity
-                    $quantityDiff =  -$currentQuantity + $quantity;
+                    $quantityDiff = -$currentQuantity + $quantity;
 
                     if ($quantityDiff > $currentStock) {
                         // Rollback the transaction and return an error response if the requested quantity exceeds the current stock
@@ -934,9 +950,9 @@ return function (App $app) use ($pdo) {
                         $response->getBody()->write($responseBody);
                         return $response;
                     }
-          
+
                     $newStock = $currentStock - $quantityDiff;
-                
+
                     // Update the quantity in the cart_items table
                     $stmt = $pdo->prepare("UPDATE cart_items SET quantity = :quantity WHERE cart_id = :cart_id AND product_id = :product_id");
                     $stmt->execute([
@@ -977,121 +993,121 @@ return function (App $app) use ($pdo) {
                 return $response;
             }
         })->add(verifyTokenAndAuthorization::class);
-        $app->put('/{id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
-            $requestBody = json_decode($request->getBody()->getContents(), true);
-            $queryParams = $request->getQueryParams();
-            $queryParams['id'] = $requestBody['id'];
-            $id = $args['id'];
-            $validator = new Validator;
-            $validation = $validator->validate($requestBody, [
-                'items' => 'required|array',
-            ]);
-            $items = $requestBody['items'];
+        // $app->put('/{id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
+        //     $requestBody = json_decode($request->getBody()->getContents(), true);
+        //     $queryParams = $request->getQueryParams();
+        //     $queryParams['id'] = $requestBody['id'];
+        //     $id = $args['id'];
+        //     $validator = new Validator;
+        //     $validation = $validator->validate($requestBody, [
+        //         'items' => 'required|array',
+        //     ]);
+        //     $items = $requestBody['items'];
 
-            if ($validation->fails()) {
-                $errors = $validation->errors()->firstOfAll();
-                $responseBody = json_encode(['errors' => $errors]);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response = $response->withStatus(400);
-                $response->getBody()->write($responseBody);
-                return $response;
-            }
+        //     if ($validation->fails()) {
+        //         $errors = $validation->errors()->firstOfAll();
+        //         $responseBody = json_encode(['errors' => $errors]);
+        //         $response = $response->withHeader('Content-Type', 'application/json');
+        //         $response = $response->withStatus(400);
+        //         $response->getBody()->write($responseBody);
+        //         return $response;
+        //     }
 
-            // Begin transaction
-            $pdo->beginTransaction();
+        //     // Begin transaction
+        //     $pdo->beginTransaction();
 
-            try {
-                // Iterate over each item in the cart
-                foreach ($items as $item) {
-                    $productId = $item['product_id'];
-                    $quantity = $item['quantity'];
+        //     try {
+        //         // Iterate over each item in the cart
+        //         foreach ($items as $item) {
+        //             $productId = $item['product_id'];
+        //             $quantity = $item['quantity'];
 
-                    // Check if the product exists
-                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM products WHERE id = :product_id");
-                    $stmt->execute(['product_id' => $productId]);
-                    $productExists = $stmt->fetchColumn();
+        //             // Check if the product exists
+        //             $stmt = $pdo->prepare("SELECT COUNT(*) FROM products WHERE id = :product_id");
+        //             $stmt->execute(['product_id' => $productId]);
+        //             $productExists = $stmt->fetchColumn();
 
-                    if (!$productExists) {
-                        // Rollback the transaction and return an error response if the product doesn't exist
-                        $pdo->rollBack();
-                        $message = [
-                            'message' => 'Product ' . $productId . ' does not exist'
-                        ];
-                        $responseBody = json_encode($message);
-                        $response = $response->withHeader('Content-Type', 'application/json');
-                        $response = $response->withStatus(400);
-                        $response->getBody()->write($responseBody);
-                        return $response;
-                    }
+        //             if (!$productExists) {
+        //                 // Rollback the transaction and return an error response if the product doesn't exist
+        //                 $pdo->rollBack();
+        //                 $message = [
+        //                     'message' => 'Product ' . $productId . ' does not exist'
+        //                 ];
+        //                 $responseBody = json_encode($message);
+        //                 $response = $response->withHeader('Content-Type', 'application/json');
+        //                 $response = $response->withStatus(400);
+        //                 $response->getBody()->write($responseBody);
+        //                 return $response;
+        //             }
 
-                    // Retrieve the current quantity of the cart item from the database
-                    $stmt = $pdo->prepare("SELECT quantity FROM cart_items WHERE id = :id");
-                    $stmt->execute(['id' => $id]);
-                    $currentQuantity = $stmt->fetchColumn();
+        //             // Retrieve the current quantity of the cart item from the database
+        //             $stmt = $pdo->prepare("SELECT quantity FROM cart_items WHERE id = :id");
+        //             $stmt->execute(['id' => $id]);
+        //             $currentQuantity = $stmt->fetchColumn();
 
-                    // Retrieve the current stock of the product from the database
-                    $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
-                    $stmt->execute(['product_id' => $productId]);
-                    $currentStock = $stmt->fetchColumn();
+        //             // Retrieve the current stock of the product from the database
+        //             $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
+        //             $stmt->execute(['product_id' => $productId]);
+        //             $currentStock = $stmt->fetchColumn();
 
-                    // Calculate the difference between the new quantity and the current quantity
-                    $quantityDiff = $quantity - $currentQuantity;
+        //             // Calculate the difference between the new quantity and the current quantity
+        //             $quantityDiff = $quantity - $currentQuantity;
 
-                    if ($quantityDiff > $currentStock) {
-                        // Rollback the transaction and return an error response if the requested quantity exceeds the current stock
-                        $pdo->rollBack();
-                        $message = [
-                            'message' => 'Insufficient stock for product ' . $productId
-                        ];
-                        $responseBody = json_encode($message);
-                        $response = $response->withHeader('Content-Type', 'application/json');
-                        $response = $response->withStatus(400);
-                        $response->getBody()->write($responseBody);
-                        return $response;
-                    }
+        //             if ($quantityDiff > $currentStock) {
+        //                 // Rollback the transaction and return an error response if the requested quantity exceeds the current stock
+        //                 $pdo->rollBack();
+        //                 $message = [
+        //                     'message' => 'Insufficient stock for product ' . $productId
+        //                 ];
+        //                 $responseBody = json_encode($message);
+        //                 $response = $response->withHeader('Content-Type', 'application/json');
+        //                 $response = $response->withStatus(400);
+        //                 $response->getBody()->write($responseBody);
+        //                 return $response;
+        //             }
 
-                    // Update the quantity in the cart_items table
-                    $stmt = $pdo->prepare("UPDATE cart_items SET quantity = :quantity WHERE id = :id");
-                    $stmt->execute([
-                        'quantity' => $quantity,
-                        'id' => $id
-                    ]);
+        //             // Update the quantity in the cart_items table
+        //             $stmt = $pdo->prepare("UPDATE cart_items SET quantity = :quantity WHERE id = :id");
+        //             $stmt->execute([
+        //                 'quantity' => $quantity,
+        //                 'id' => $id
+        //             ]);
 
-                    // Calculate the new stock for the product
-                    $newStock = $currentStock + $quantityDiff;
+        //             // Calculate the new stock for the product
+        //             $newStock = $currentStock + $quantityDiff;
 
-                    // Update the stock in the products table
-                    $stmt = $pdo->prepare("UPDATE products SET stock = :new_stock WHERE id = :product_id");
-                    $stmt->execute([
-                        'new_stock' => $newStock,
-                        'product_id' => $productId
-                    ]);
-                }
+        //             // Update the stock in the products table
+        //             $stmt = $pdo->prepare("UPDATE products SET stock = :new_stock WHERE id = :product_id");
+        //             $stmt->execute([
+        //                 'new_stock' => $newStock,
+        //                 'product_id' => $productId
+        //             ]);
+        //         }
 
-                // Commit the transaction
-                $pdo->commit();
+        //         // Commit the transaction
+        //         $pdo->commit();
 
-                // Return a success response
-                $message = [
-                    'message' => 'Cart items updated successfully'
-                ];
-                $responseBody = json_encode($message);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response->getBody()->write($responseBody);
-                return $response;
-            } catch (PDOException $e) {
-                // Rollback the transaction and return an error response if an exception occurs
-                $pdo->rollBack();
-                $message = [
-                    'error' => $e->getMessage()
-                ];
-                $responseBody = json_encode($message);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response = $response->withStatus(500);
-                $response->getBody()->write($responseBody);
-                return $response;
-            }
-        })->add(verifyTokenAndAuthorization::class);
+        //         // Return a success response
+        //         $message = [
+        //             'message' => 'Cart items updated successfully'
+        //         ];
+        //         $responseBody = json_encode($message);
+        //         $response = $response->withHeader('Content-Type', 'application/json');
+        //         $response->getBody()->write($responseBody);
+        //         return $response;
+        //     } catch (PDOException $e) {
+        //         // Rollback the transaction and return an error response if an exception occurs
+        //         $pdo->rollBack();
+        //         $message = [
+        //             'error' => $e->getMessage()
+        //         ];
+        //         $responseBody = json_encode($message);
+        //         $response = $response->withHeader('Content-Type', 'application/json');
+        //         $response = $response->withStatus(500);
+        //         $response->getBody()->write($responseBody);
+        //         return $response;
+        //     }
+        // })->add(verifyTokenAndAuthorization::class);
 
         $app->delete('/{cart_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $cartId = $args['cart_id'];
@@ -1184,7 +1200,7 @@ return function (App $app) use ($pdo) {
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
-        });
+        })->add(verifyTokenAndAuthorization::class);
 
         $app->get('/user/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];
@@ -1232,7 +1248,7 @@ return function (App $app) use ($pdo) {
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
-        });
+        })->add(verifyTokenAndAuthorization::class);
         $app->get('/cart/{cart_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $cartId = $args['cart_id'];
 
@@ -1269,7 +1285,7 @@ return function (App $app) use ($pdo) {
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
-        });
+        })->add(verifyTokenAndAuthorization::class);
 
     });
 
