@@ -733,7 +733,6 @@ return function (App $app) use ($pdo) {
         });
     });
     $app->group(('/cart'), function ($app) use ($pdo) {
-
         $app->post('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
@@ -745,7 +744,7 @@ return function (App $app) use ($pdo) {
             ]);
             $userId = $requestBody['user_id'];
             $items = $requestBody['items'];
-        
+
             if ($validation->fails()) {
                 $errors = $validation->errors()->firstOfAll();
                 $responseBody = json_encode(['errors' => $errors]);
@@ -754,22 +753,33 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-        
-     
+
             // Keep track of the products and quantities to be updated in a separate array
             $productsToUpdate = [];
-        
+
+            // Check if the user already has a cart
+            $stmt = $pdo->prepare("SELECT id FROM carts WHERE user_id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
+            $cartId = $stmt->fetchColumn();
+
+            // If the user doesn't have a cart, create a new cart for the user
+            if (!$cartId) {
+                $stmt = $pdo->prepare("INSERT INTO carts (user_id) VALUES (:user_id)");
+                $stmt->execute(['user_id' => $userId]);
+                $cartId = $pdo->lastInsertId();
+            }
+
             // Iterate over each item in the cart
             foreach ($items as $item) {
                 $productId = $item['product_id'];
                 $quantity = $item['quantity'];
-        
+
                 // Check if the product exists
-                $stmt = $pdo->prepare("SELECT COUNT(*) FROM products WHERE id = :product_id");
+                $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
                 $stmt->execute(['product_id' => $productId]);
-                $productExists = $stmt->fetchColumn();
-        
-                if (!$productExists) {
+                $productStock = $stmt->fetchColumn();
+
+                if ($productStock === false) {
                     // Return an error response if the product doesn't exist
                     $message = [
                         'error' => 'Product ' . $productId . ' does not exist'
@@ -780,14 +790,40 @@ return function (App $app) use ($pdo) {
                     $response->getBody()->write($responseBody);
                     return $response;
                 }
-        
-                // Retrieve the current quantity of the product from the database
-                $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
-                $stmt->execute(['product_id' => $productId]);
-                $currentQuantity = $stmt->fetchColumn();
-        
-                if ($quantity > $currentQuantity) {
-                    // Return an error response if the requested quantity exceeds the current quantity
+
+                // Retrieve the current quantity of the product in the cart
+                $stmt = $pdo->prepare("SELECT quantity FROM cart_items WHERE cart_id = :cart_id AND product_id = :product_id");
+                $stmt->execute(['cart_id' => $cartId, 'product_id' => $productId]);
+                $existingQuantity = $stmt->fetchColumn();
+
+                if ($existingQuantity) {
+                    // If the product is already in the cart, increase the quantity
+                    $newquantity = $existingQuantity + $quantity;
+                    // Update the quantity in the cart_items table
+                    $stmt = $pdo->prepare("UPDATE cart_items SET quantity = :new_quantity 
+                                           WHERE cart_id = :cart_id AND product_id = :product_id");
+                    $stmt->execute([
+                        'new_quantity' => $newquantity,
+                        'cart_id' => $cartId,
+                        'product_id' => $productId
+                    ]);
+                } else {
+                    // If the product is not in the cart, add it
+                    $stmt = $pdo->prepare("INSERT INTO cart_items (cart_id, user_id, product_id, quantity) 
+                               VALUES (:cart_id, :user_id, :product_id, :quantity)");
+                    $stmt->execute([
+                        'cart_id' => $cartId,
+                        'user_id' => $userId,
+                        'product_id' => $productId,
+                        'quantity' => $newquantity
+                    ]);
+                }
+
+                // Update the product's stock
+                $newStock = $productStock - $quantity;
+
+                if ($newStock < 0) {
+                    // Return an error response if the product stock is insufficient
                     $message = [
                         'error' => 'Insufficient stock for product ' . $productId
                     ];
@@ -797,36 +833,20 @@ return function (App $app) use ($pdo) {
                     $response->getBody()->write($responseBody);
                     return $response;
                 }
-        
-                // Update the quantity in the products table
-                $newQuantity = $currentQuantity - $quantity;
-                $stmt = $pdo->prepare("UPDATE products SET stock = :new_quantity WHERE id = :product_id");
+
+                $stmt = $pdo->prepare("UPDATE products SET stock = :new_stock WHERE id = :product_id");
                 $stmt->execute([
-                    'new_quantity' => $newQuantity,
+                    'new_stock' => $newStock,
                     'product_id' => $productId
                 ]);
-        
+
                 // Add the product and its quantity to the productsToUpdate array
                 $productsToUpdate[] = [
                     'product_id' => $productId,
-                    'quantity' => $quantity
+                    'quantity' => $newquantity
                 ];
-               // Insert a new cart for the user
-               $stmt = $pdo->prepare("INSERT INTO carts (user_id) VALUES (:user_id)");
-               $stmt->execute(['user_id' => $userId]);
-               $cartId = $pdo->lastInsertId();
-           
-                // Insert the product, its quantity, and the associated cart ID into the cart_items table
-                $stmt = $pdo->prepare("INSERT INTO cart_items (cart_id, user_id, product_id, quantity) 
-                           VALUES (:cart_id, :user_id, :product_id, :quantity)");
-                $stmt->execute([
-                    'cart_id' => $cartId,
-                    'user_id' => $userId,
-                    'product_id' => $productId,
-                    'quantity' => $quantity
-                ]);
             }
-        
+
             // Return a success response
             $message = [
                 'message' => 'Cart items added successfully'
@@ -836,7 +856,127 @@ return function (App $app) use ($pdo) {
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAuthorization::class);
-        
+
+        $app->put('/cart/{cart_id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
+            $cartId = $args['cart_id'];
+            $requestBody = json_decode($request->getBody()->getContents(), true);
+
+            // Validate the request body
+            $validator = new Validator;
+            $validation = $validator->validate($requestBody, [
+                'items' => 'required|array',
+            ]);
+            $items = $requestBody['items'];
+
+            if ($validation->fails()) {
+                $errors = $validation->errors()->firstOfAll();
+                $responseBody = json_encode(['errors' => $errors]);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(400);
+                $response->getBody()->write($responseBody);
+                return $response;
+            }
+
+            // Begin transaction
+            $pdo->beginTransaction();
+
+            try {
+                // Iterate over each item in the cart
+                foreach ($items as $item) {
+                    $productId = $item['product_id'];
+                    $quantity = $item['quantity'];
+
+                    // Check if the product exists
+                    $stmt = $pdo->prepare("SELECT COUNT(*) FROM products WHERE id = :product_id");
+                    $stmt->execute(['product_id' => $productId]);
+                    $productExists = $stmt->fetchColumn();
+
+                    if (!$productExists) {
+                        // Rollback the transaction and return an error response if the product doesn't exist
+                        $pdo->rollBack();
+                        $message = [
+                            'error' => 'Product ' . $productId . ' does not exist'
+                        ];
+                        $responseBody = json_encode($message);
+                        $response = $response->withHeader('Content-Type', 'application/json');
+                        $response = $response->withStatus(400);
+                        $response->getBody()->write($responseBody);
+                        return $response;
+                    }
+
+                    // Retrieve the current quantity of the cart item from the database
+                    $stmt = $pdo->prepare("SELECT quantity FROM cart_items WHERE cart_id = :cart_id AND product_id = :product_id");
+                    $stmt->execute(['cart_id' => $cartId, 'product_id' => $productId]);
+                    $currentQuantity = $stmt->fetchColumn();
+
+                    // Retrieve the current stock of the product from the database
+                    $stmt = $pdo->prepare("SELECT stock FROM products WHERE id = :product_id");
+                    $stmt->execute(['product_id' => $productId]);
+                    $currentStock = $stmt->fetchColumn();
+// -20 -40=-60+160
+// -20
+
+// 160 -20
+// 20 -40 = -20
+// 20
+                    // Calculate the difference between the new quantity and the current quantity
+                    $quantityDiff =  -$currentQuantity + $quantity;
+
+                    if ($quantityDiff > $currentStock) {
+                        // Rollback the transaction and return an error response if the requested quantity exceeds the current stock
+                        $pdo->rollBack();
+                        $message = [
+                            'error' => 'Insufficient stock for product ' . $productId
+                        ];
+                        $responseBody = json_encode($message);
+                        $response = $response->withHeader('Content-Type', 'application/json');
+                        $response = $response->withStatus(400);
+                        $response->getBody()->write($responseBody);
+                        return $response;
+                    }
+          
+                    $newStock = $currentStock - $quantityDiff;
+                
+                    // Update the quantity in the cart_items table
+                    $stmt = $pdo->prepare("UPDATE cart_items SET quantity = :quantity WHERE cart_id = :cart_id AND product_id = :product_id");
+                    $stmt->execute([
+                        'quantity' => $quantity,
+                        'cart_id' => $cartId,
+                        'product_id' => $productId
+                    ]);
+
+                    // Update the stock in the products table
+                    $stmt = $pdo->prepare("UPDATE products SET stock = :new_stock WHERE id = :product_id");
+                    $stmt->execute([
+                        'new_stock' => $newStock,
+                        'product_id' => $productId
+                    ]);
+                }
+
+                // Commit the transaction
+                $pdo->commit();
+
+                // Return a success response
+                $message = [
+                    'message' => 'Cart items updated successfully'
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response->getBody()->write($responseBody);
+                return $response;
+            } catch (PDOException $e) {
+                // Rollback the transaction and return an error response if an exception occurs
+                $pdo->rollBack();
+                $message = [
+                    'error' => $e->getMessage()
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(500);
+                $response->getBody()->write($responseBody);
+                return $response;
+            }
+        })->add(verifyTokenAndAuthorization::class);
         $app->put('/{id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $queryParams = $request->getQueryParams();
@@ -960,7 +1100,7 @@ return function (App $app) use ($pdo) {
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM carts WHERE id = :cart_id");
             $stmt->execute(['cart_id' => $cartId]);
             $cartExists = (int) $stmt->fetchColumn();
-        
+
             if ($cartExists === 0) {
                 // Return an error response if the cart does not exist
                 $message = [
@@ -972,31 +1112,31 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-        
+
             // Retrieve the cart items and their quantities
             $stmt = $pdo->prepare("SELECT product_id, quantity FROM cart_items WHERE cart_id = :cart_id");
             $stmt->execute(['cart_id' => $cartId]);
             $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
             // Delete the cart and its associated cart_items from the database
             $stmt = $pdo->prepare("DELETE FROM cart_items WHERE cart_id = :cart_id");
             $stmt->execute(['cart_id' => $cartId]);
-        
+
             $stmt = $pdo->prepare("DELETE FROM carts WHERE id = :cart_id");
             $stmt->execute(['cart_id' => $cartId]);
-        
+
             // Return the quantities of cart items back to the product stock
             foreach ($cartItems as $cartItem) {
                 $productId = $cartItem['product_id'];
                 $quantity = $cartItem['quantity'];
-        
+
                 $stmt = $pdo->prepare("UPDATE products SET stock = stock + :quantity WHERE id = :product_id");
                 $stmt->execute([
                     'quantity' => $quantity,
                     'product_id' => $productId
                 ]);
             }
-        
+
             // Return a success response
             $message = [
                 'message' => 'Cart and associated items deleted successfully'
@@ -1008,89 +1148,129 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAuthorization::class);
 
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
-            $stmt = $pdo->prepare("SELECT p.*, c.title AS category_title
-                          FROM products p
-                          LEFT JOIN product_categories pc ON p.id = pc.product_id
-                          LEFT JOIN categories c ON pc.category_id = c.id");
+            // Retrieve all carts
+            $stmt = $pdo->prepare("SELECT * FROM carts");
             $stmt->execute();
-            $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $carts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // Process the result and format it as needed
-            $formattedProducts = [];
-            foreach ($products as $product) {
-                $productId = $product['id'];
-                $categoryTitle = $product['category_title'];
+            // Create an empty array to hold the grouped carts
+            $groupedCarts = [];
 
-                // If the product doesn't exist in the formattedProducts array, add it
-                if (!isset($formattedProducts[$productId])) {
-                    $formattedProducts[$productId] = [
-                        'id' => $productId,
-                        'title' => $product['title'],
-                        'description' => $product['description'],
-                        'images' => json_decode($product['images'], true),
-                        'price' => $product['price'],
-                        'discount' => $product['discount'],
-                        'stock' => $product['stock'],
-                        'categories' => []
-                    ];
+            // Iterate over each cart
+            foreach ($carts as $cart) {
+                $cartId = $cart['id'];
+
+                // Retrieve the cart items for the current cart
+                $stmt = $pdo->prepare("SELECT ci.quantity, p.title ,ci.id as cart_item_id,p.id  as product_id
+                                       FROM cart_items ci
+                                       INNER JOIN products p ON ci.product_id = p.id
+                                       WHERE ci.cart_id = :cart_id");
+                $stmt->execute(['cart_id' => $cartId]);
+                $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Assign the cart items to the current cart
+                $cart['items'] = $cartItems;
+
+                // Group the cart by user_id
+                $userId = $cart['user_id'];
+                if (!isset($groupedCarts[$userId])) {
+                    $groupedCarts[$userId] = [];
                 }
-
-                // If a category title is associated with the product, add it to the categories array
-                if ($categoryTitle) {
-                    $formattedProducts[$productId]['categories'][] = $categoryTitle;
-                }
+                $groupedCarts[$userId][] = $cart;
             }
 
-            // Convert the array of formatted products to JSON and return the response
-            $responseBody = json_encode(array_values($formattedProducts));
+            // Create the response JSON
+            $responseBody = json_encode(['carts' => $groupedCarts]);
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
         });
-        $app->get('/{id}', function (Request $request, Response $response, $args) use ($pdo) {
-            $id = $args['id'];
 
-            $stmt = $pdo->prepare("SELECT p.*, GROUP_CONCAT(c.title) AS category_titles
-                                  FROM products p
-                                  LEFT JOIN product_categories pc ON p.id = pc.product_id
-                                  LEFT JOIN categories c ON pc.category_id = c.id
-                                  WHERE p.id = :id
-                                  GROUP BY p.id");
-            $stmt->execute(['id' => $id]);
-            $product = $stmt->fetch(PDO::FETCH_ASSOC);
+        $app->get('/user/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
+            $userId = $args['user_id'];
 
-            if ($product) {
-                $productId = $product['id'];
+            // Check if the user exists
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
+            $userExists = (int) $stmt->fetchColumn();
 
-                $formattedProduct = [
-                    'id' => $productId,
-                    'title' => $product['title'],
-                    'description' => $product['description'],
-                    'images' => json_decode($product['images'], true),
-                    'price' => $product['price'],
-                    'discount' => $product['discount'],
-                    'stock' => $product['stock'],
-                    'categories' => explode(',', $product['category_titles']),
+            if ($userExists === 0) {
+                // Return an error response if the user doesn't exist
+                $message = [
+                    'error' => 'User does not exist'
                 ];
-
-                // Convert the formatted product to JSON and return the response
-                $responseBody = json_encode($formattedProduct);
+                $responseBody = json_encode($message);
                 $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(404);
                 $response->getBody()->write($responseBody);
                 return $response;
             }
 
-            // Product not found
-            $message = [
-                'message' => 'Product not found'
-            ];
-            $responseBody = json_encode($message);
+            // Retrieve all carts for the given user_id
+            $stmt = $pdo->prepare("SELECT * FROM carts WHERE user_id = :user_id");
+            $stmt->execute(['user_id' => $userId]);
+            $carts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Iterate over each cart
+            foreach ($carts as &$cart) {
+                $cartId = $cart['id'];
+
+                // Retrieve the cart items for the current cart
+                $stmt = $pdo->prepare("SELECT ci.quantity, p.title,ci.id as cart_item_id,p.id  as product_id
+                                       FROM cart_items ci
+                                       INNER JOIN products p ON ci.product_id = p.id
+                                       WHERE ci.cart_id = :cart_id");
+                $stmt->execute(['cart_id' => $cartId]);
+                $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Assign the cart items to the current cart
+                $cart['items'] = $cartItems;
+            }
+
+            // Create the response JSON
+            $responseBody = json_encode(['carts' => $carts]);
             $response = $response->withHeader('Content-Type', 'application/json');
-            $response = $response->withStatus(404);
             $response->getBody()->write($responseBody);
             return $response;
-
         });
+        $app->get('/cart/{cart_id}', function (Request $request, Response $response, $args) use ($pdo) {
+            $cartId = $args['cart_id'];
+
+            // Retrieve the cart by its ID
+            $stmt = $pdo->prepare("SELECT * FROM carts WHERE id = :cart_id");
+            $stmt->execute(['cart_id' => $cartId]);
+            $cart = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$cart) {
+                // Return an error response if the cart doesn't exist
+                $message = [
+                    'error' => 'Cart does not exist'
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(404);
+                $response->getBody()->write($responseBody);
+                return $response;
+            }
+
+            // Retrieve the cart items for the current cart
+            $stmt = $pdo->prepare("SELECT ci.quantity, p.title,ci.id as cart_item_id ,p.id  as product_id
+                                   FROM cart_items ci
+                                   INNER JOIN products p ON ci.product_id = p.id
+                                   WHERE ci.cart_id = :cart_id");
+            $stmt->execute(['cart_id' => $cartId]);
+            $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Assign the cart items to the cart
+            $cart['items'] = $cartItems;
+
+            // Create the response JSON
+            $responseBody = json_encode(['cart' => $cart]);
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response->getBody()->write($responseBody);
+            return $response;
+        });
+
     });
 
 
