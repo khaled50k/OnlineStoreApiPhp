@@ -4,7 +4,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Routing\RouteCollectorProxy;
 use Rakit\Validation\Validator;
-use Slim\Http\UploadedFile;
+
 
 
 require __DIR__ . '/../app/Middleware/AuthMiddleware.php';
@@ -1325,7 +1325,7 @@ return function (App $app) use ($pdo) {
             $response->getBody()->write($responseBody);
             return $response;
         }
-    });
+    })->add(verifyTokenAndAdmin::class);
     
 
     // Helper function to move the uploaded file to a specific directory
