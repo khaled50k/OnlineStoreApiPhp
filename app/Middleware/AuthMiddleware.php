@@ -68,7 +68,7 @@ class verifyTokenAndAuthorization
         $token = $cookies['SESSION'] ?? null;
         $queryParams = $request->getQueryParams();
         $userId = $queryParams['userid'] ?$queryParams['userid'] :$args['user_id'];
-   echo $userId;
+
 
         if (!$token) {
             $response = new Response();

@@ -4,7 +4,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Routing\RouteCollectorProxy;
 use Rakit\Validation\Validator;
-
+use Slim\Http\UploadedFile;
 
 
 require __DIR__ . '/../app/Middleware/AuthMiddleware.php';
@@ -749,6 +749,7 @@ return function (App $app) use ($pdo) {
         });
     });
     $app->group(('/cart'), function ($app) use ($pdo) {
+
         $app->post('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
@@ -1289,6 +1290,55 @@ return function (App $app) use ($pdo) {
 
     });
 
+    $app->post('/upload', function ($request, $response) {
+        try {
+            $uploadedFiles = $request->getUploadedFiles();
+    
+            if (!isset($uploadedFiles['image'])) {
+                throw new Exception('No file uploaded.');
+            }
+    
+            $uploadedFile = $uploadedFiles['image'];
+    
+            if ($uploadedFile->getError() !== UPLOAD_ERR_OK) {
+                throw new Exception('Error uploading file.');
+            }
+    
+            $directory = 'C:\xampp\htdocs\e-commerce-php\app\upload';
+            $filename = moveUploadedFile($directory, $uploadedFile);
+    
+            $message = [
+                'filename' => $filename
+            ];
+            $responseBody = json_encode($message);
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response = $response->withStatus(200);
+            $response->getBody()->write($responseBody);
+            return $response;
+        } catch (Exception $e) {
+            $message = [
+                'error' => $e->getMessage()
+            ];
+            $responseBody = json_encode($message);
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response = $response->withStatus(400);
+            $response->getBody()->write($responseBody);
+            return $response;
+        }
+    });
+    
+
+    // Helper function to move the uploaded file to a specific directory
+    function moveUploadedFile($directory, $uploadedFile)
+    {
+        $extension = pathinfo($uploadedFile->getClientFilename(), PATHINFO_EXTENSION);
+        $basename = bin2hex(random_bytes(8)); // Generate a unique filename
+        $filename = sprintf('%s.%0.8s', $basename, $extension);
+
+        $uploadedFile->moveTo($directory . DIRECTORY_SEPARATOR . $filename);
+
+        return "http://localhost/e-commerce-php/app/upload/$filename";
+    };
 
 
 };
