@@ -34,13 +34,8 @@ function verifyToken($token)
         $decoded = JWT::decode($token, new Key($key, 'HS256'), ['HS256']);
         return (array) $decoded;
     } catch (Exception $e) {
-        // echo $e;
-        $message = [
-            'message' => 'Invalid Token.',
-        ];
-        $responseBody = json_encode($message);
-        
-        echo $responseBody;
+        echo $e;
+       
     }
 }
 

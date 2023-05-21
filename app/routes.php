@@ -33,7 +33,7 @@ return function (App $app) use ($pdo) {
                 $username = $user['username'];
                 $role = $user['role'];
                 $res = generateToken($id, $username, $role);
-                $response = $response->withHeader('Set-Cookie', 'SESSION=' . $res['token'] . '; Path= /' . '; HttpOnly' . '; expires=' . gmdate('D, d M Y H:i:s \G\M\T', $res['exp']));
+                $response = $response->withHeader('Set-Cookie', 'PHPSESSION=' . $res['token'] . '; Path= /' . '; HttpOnly' . '; expires=' . gmdate('D, d M Y H:i:s \G\M\T', $res['exp']));
                 $message = [
                     'message' => 'Login successful.',
                 ];
@@ -138,6 +138,16 @@ return function (App $app) use ($pdo) {
             return $response;
 
         })->add(verifyTokenAndAdmin::class);
+        $app->get('/userdetails', function (Request $request, Response $response, $next) use ($pdo) {
+
+         
+            $responseBody =json_encode( $request->getAttribute('user'));
+            $response->getBody()->write($responseBody);
+            $response = $response->withHeader('Content-Type', 'application/json');
+
+            return $response;
+
+        })->add(userDataByToken::class);
 
         $app->get('/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];

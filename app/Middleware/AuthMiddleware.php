@@ -13,9 +13,8 @@ class verifyTokenAndAdmin
     public function __invoke(Request $request, RequestHandler $handler): Response
     {
         $cookies = $request->getCookieParams();
-        $token = $cookies['SESSION'] ?? null;
-
-        if (!$token) {
+        $token = $cookies['PHPSESSION'] ?? null;
+    if (!$token) {
             $response = new Response();
             $message = [
                 'message' => 'You are not authenticated.',
@@ -57,6 +56,46 @@ class verifyTokenAndAdmin
 
     }
 }
+class userDataByToken
+{
+    public function __invoke(Request $request, RequestHandler $handler): Response
+    {
+        $cookies = $request->getCookieParams();
+        $token = $cookies['PHPSESSION'] ?? null;
+    if (!$token) {
+            $response = new Response();
+            $message = [
+                'message' => 'You are not authenticated.',
+            ];
+            $responseBody = json_encode($message);
+
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response = $response->withStatus(401);
+            $response->getBody()->write($responseBody);
+            return $response;
+        }
+        $res = verifyToken($token);
+        if (!$res) {
+            $response = new Response();
+            $message = [
+                'message' => 'You are not Authorized.',
+            ];
+            $responseBody = json_encode($message);
+
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response = $response->withStatus(401);
+            $response->getBody()->write($responseBody);
+            return $response;
+        }
+
+        $request = $request->withAttribute('user', $res);
+        $response = $handler->handle($request);
+        return $response;
+
+       
+
+    }
+}
 class verifyTokenAndAuthorization
 {
     public function __invoke(Request $request, RequestHandler $handler): Response
@@ -65,7 +104,7 @@ class verifyTokenAndAuthorization
         $route = $routeContext->getRoute();
         $args = $route->getArguments();
         $cookies = $request->getCookieParams();
-        $token = $cookies['SESSION'] ?? null;
+        $token = $cookies['PHPSESSION'] ?? null;
         $queryParams = $request->getQueryParams();
         $userId = $queryParams['userid'] ?$queryParams['userid'] :$args['user_id'];
 
