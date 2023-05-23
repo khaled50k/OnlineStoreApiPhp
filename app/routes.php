@@ -23,22 +23,47 @@ return function (App $app) use ($pdo) {
             $email = $requestBody['email'];
             $password = $requestBody['password'];
 
-            $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ?");
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? ");
             $stmt->execute([$email]);
             $user = $stmt->fetch();
 
+            if ($user['status'] === 'inactive') {
+                $response = $response->withHeader('Content-Type', 'application/json');
+
+                $message = [
+                    'message' => 'Your account is inactive.',
+                ];
+                $responseBody = json_encode($message);
+                $response->withStatus(401);
+                $response->getBody()->write($responseBody);
+                return $response;
+
+            }
+
+            if ($user && $user['deleted'] === 1) {
+
+                $response = $response->withHeader('Content-Type', 'application/json');
+
+                $message = [
+                    'message' => 'Your account is deleted.',
+                ];
+                $responseBody = json_encode($message);
+                $response->withStatus(401);
+                $response->getBody()->write($responseBody);
+                return $response;
+
+            }
 
             if ($user && password_verify($password, $user['password'])) {
                 $id = $user['id'];
                 $username = $user['username'];
                 $role = $user['role'];
                 $res = generateToken($id, $username, $role);
-                $response = $response->withHeader('Set-Cookie', 'PHPSESSION=' . $res['token'] . '; Path= /' . '; HttpOnly' . '; expires=' . gmdate('D, d M Y H:i:s \G\M\T', $res['exp']));
+                $response = $response->withHeader('Set-Cookie', 'PHPSESSION=' . $res['token'] . '; Path= /' . '; expires=' . gmdate('D, d M Y H:i:s \G\M\T', $res['exp']));
                 $message = [
                     'message' => 'Login successful.',
                 ];
                 $response = $response->withHeader('Content-Type', 'application/json');
-
                 $responseBody = json_encode($message);
                 $response->withStatus(401);
                 $response->getBody()->write($responseBody);
@@ -54,6 +79,7 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
+
         });
 
 
@@ -127,9 +153,9 @@ return function (App $app) use ($pdo) {
     $app->group('/user', function ($app) use ($pdo) {
 
         // Route for getting all users (for admin only)
-        $app->get('/', function (Request $request, Response $response, $next) use ($pdo) {
+        $app->get('/', function (Request $request, Response $response) use ($pdo) {
 
-            $stmt = $pdo->query("SELECT * FROM users");
+            $stmt = $pdo->query("SELECT * FROM users WHERE  deleted = 0 ");
             $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $responseBody = json_encode($users);
             $response->getBody()->write($responseBody);
@@ -138,10 +164,8 @@ return function (App $app) use ($pdo) {
             return $response;
 
         })->add(verifyTokenAndAdmin::class);
-        $app->get('/userdetails', function (Request $request, Response $response, $next) use ($pdo) {
-
-         
-            $responseBody =json_encode( $request->getAttribute('user'));
+        $app->get('/userdetails', function (Request $request, Response $response) use ($pdo) {
+            $responseBody = json_encode($request->getAttribute('user'));
             $response->getBody()->write($responseBody);
             $response = $response->withHeader('Content-Type', 'application/json');
 
@@ -151,7 +175,7 @@ return function (App $app) use ($pdo) {
 
         $app->get('/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];
-            $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE   deleted = 0 AND id = ? ");
             $stmt->execute([$userId]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -173,7 +197,7 @@ return function (App $app) use ($pdo) {
             return $response;
 
         })->add(verifyTokenAndAuthorization::class);
-        $app->put('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
+        $app->put('/', function (Request $request, Response $response, $next) use ($pdo) {
 
 
             $requestBody = json_decode($request->getBody()->getContents(), true);
@@ -181,19 +205,19 @@ return function (App $app) use ($pdo) {
             $existingDataStmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
             $existingDataStmt->execute([$userId]);
             $existingData = $existingDataStmt->fetch(PDO::FETCH_ASSOC);
-            $updatedData = array_merge($existingData, $requestBody);
 
-            if (!empty($requestBody['password'])) {
-                $password = $requestBody['password'];
-                $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-                $updatedData['password'] = $hashedPassword;
+            // Check if a new password is provided in the request body
+            if (isset($requestBody['password']) && !empty($requestBody['password'])) {
+            } else {
+                // Retain the existing password from the database
+                $requestBody['password'] = $existingData['password'];
             }
 
             // Remove the userId from the updated data
-            unset($updatedData['id']);
+            unset($requestBody['id']);
             $validator = new Validator;
             // Define validation rules
-            $validation = $validator->validate($updatedData, [
+            $validation = $validator->validate($requestBody, [
                 'username' => 'min:4',
                 'email' => 'email',
                 'password' => 'min:6 ',
@@ -214,7 +238,7 @@ return function (App $app) use ($pdo) {
             }
             $updateStmt = 'UPDATE users SET ';
             $params = [];
-            foreach ($updatedData as $key => $value) {
+            foreach ($requestBody as $key => $value) {
                 $updateStmt .= $key . ' = :' . $key . ', ';
                 $params[$key] = $value;
             }
@@ -226,6 +250,8 @@ return function (App $app) use ($pdo) {
             $stmt->execute($params);
 
             if ($stmt->rowCount() > 0) {
+                revokeToken($userId);
+                generateToken($userId,$requestBody['username'],$requestBody['role']);
                 $message = [
                     'message' => 'User updated successfully'
                 ];
@@ -273,9 +299,11 @@ return function (App $app) use ($pdo) {
             $stmt->execute(['cart_id' => $cartId]);
 
             // Delete the user
-            $stmt = $pdo->prepare("DELETE FROM users WHERE id = :user_id");
+            $stmt = $pdo->prepare("UPDATE users SET deleted = 1 WHERE id = :user_id");
             $stmt->execute(['user_id' => $userId]);
 
+
+            revokeToken($userId);
             if ($stmt->rowCount() > 0) {
                 $message = [
                     'message' => 'User deleted successfully'
@@ -1303,20 +1331,20 @@ return function (App $app) use ($pdo) {
     $app->post('/upload', function ($request, $response) {
         try {
             $uploadedFiles = $request->getUploadedFiles();
-    
+
             if (!isset($uploadedFiles['image'])) {
                 throw new Exception('No file uploaded.');
             }
-    
+
             $uploadedFile = $uploadedFiles['image'];
-    
+
             if ($uploadedFile->getError() !== UPLOAD_ERR_OK) {
                 throw new Exception('Error uploading file.');
             }
-    
+
             $directory = 'C:\xampp\htdocs\e-commerce-php\app\upload';
             $filename = moveUploadedFile($directory, $uploadedFile);
-    
+
             $message = [
                 'filename' => $filename
             ];
@@ -1336,7 +1364,7 @@ return function (App $app) use ($pdo) {
             return $response;
         }
     })->add(verifyTokenAndAdmin::class);
-    
+
 
     // Helper function to move the uploaded file to a specific directory
     function moveUploadedFile($directory, $uploadedFile)

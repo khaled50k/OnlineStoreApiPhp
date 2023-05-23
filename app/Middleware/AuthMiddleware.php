@@ -14,6 +14,7 @@ class verifyTokenAndAdmin
     {
         $cookies = $request->getCookieParams();
         $token = $cookies['PHPSESSION'] ?? null;
+        
     if (!$token) {
             $response = new Response();
             $message = [
@@ -87,13 +88,9 @@ class userDataByToken
             $response->getBody()->write($responseBody);
             return $response;
         }
-
         $request = $request->withAttribute('user', $res);
         $response = $handler->handle($request);
         return $response;
-
-       
-
     }
 }
 class verifyTokenAndAuthorization
