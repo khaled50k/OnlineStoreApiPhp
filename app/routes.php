@@ -96,7 +96,7 @@ return function (App $app) use ($pdo) {
             $validation = $validator->validate($requestBody, [
                 'username' => 'required|min:4',
                 'email' => 'required|email',
-                'password' => 'min:6 ',
+                'password' => 'required|min:6 ',
             ]);
 
             $validation->validate();
@@ -116,9 +116,9 @@ return function (App $app) use ($pdo) {
             $existingUser = $stmt->fetch();
             if ($existingUser) {
                 $response = $response->withHeader('Content-Type', 'application/json');
-
+                $response = $response->withStatus(400);
                 $message = [
-                    'message' => 'Username already taken.',
+                    'errors' => ['username' => 'Username already taken.'],
                 ];
                 $responseBody = json_encode($message);
                 $response->withStatus(401);
@@ -130,10 +130,10 @@ return function (App $app) use ($pdo) {
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ?");
             $stmt->execute([$email]);
             $existingUser = $stmt->fetch();
-
+            $response = $response->withStatus(400);
             if ($existingUser) {
                 $message = [
-                    'message' => 'Email already taken.',
+                    'errors' => ['email' => 'Email already taken.'],
                 ];
                 $responseBody = json_encode($message);
                 $response->withStatus(409);
@@ -198,83 +198,122 @@ return function (App $app) use ($pdo) {
 
         })->add(verifyTokenAndAuthorization::class);
         $app->put('/', function (Request $request, Response $response, $next) use ($pdo) {
+            try {
 
 
-            $requestBody = json_decode($request->getBody()->getContents(), true);
-            $userId = $request->getAttribute('userId');
-            $existingDataStmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-            $existingDataStmt->execute([$userId]);
-            $existingData = $existingDataStmt->fetch(PDO::FETCH_ASSOC);
+                $requestBody = json_decode($request->getBody()->getContents(), true);
+                $email = $requestBody['email'];
+                $password = $requestBody['password'];
+                $username = $requestBody['username'];
+                $role = $requestBody['role'] ?? 'customer';
+                $status = $requestBody['status'] ?? 'active';
+                $validator = new Validator;
+                $validation = $validator->validate($requestBody, [
+                    'username' => 'required|min:4',
+                    'email' => 'required|email',
+                    'password' => 'required|min:6 ',
+                ]);
 
-            // Check if a new password is provided in the request body
-            if (isset($requestBody['password']) && !empty($requestBody['password'])) {
-            } else {
-                // Retain the existing password from the database
-                $requestBody['password'] = $existingData['password'];
-            }
+                $validation->validate();
+                if ($validation->fails()) {
+                    $errors = $validation->errors()->firstOfAll();
+                    // Handle validation errors
+                    $responseBody = json_encode(['errors' => $errors]);
+                    $response = $response->withHeader('Content-Type', 'application/json');
+                    $response = $response->withStatus(400);
+                    $response->getBody()->write($responseBody);
+                    return $response;
 
-            // Remove the userId from the updated data
-            unset($requestBody['id']);
-            $validator = new Validator;
-            // Define validation rules
-            $validation = $validator->validate($requestBody, [
-                'username' => 'min:4',
-                'email' => 'email',
-                'password' => 'min:6 ',
-            ]);
+                }
+                $userId = $request->getAttribute('userId');
+                $existingDataStmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+                $existingDataStmt->execute([$userId]);
+                $existingData = $existingDataStmt->fetch(PDO::FETCH_ASSOC);
 
-            $validation->validate();
+                // Check if a new password is provided in the request body
+                if (isset($requestBody['password']) && !empty($requestBody['password'])) {
+                    // Update the password
+                    $requestBody['password'] = password_hash($requestBody['password'], PASSWORD_DEFAULT);
+                } else {
+                    // Retain the existing password from the database
+                    $requestBody['password'] = $existingData['password'];
+                }
 
+                // Remove the userId from the updated data
+                unset($requestBody['id']);
 
-            if ($validation->fails()) {
-                $errors = $validation->errors()->firstOfAll();
-                // Handle validation errors
-                $responseBody = json_encode(['errors' => $errors]);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response = $response->withStatus(400);
-                $response->getBody()->write($responseBody);
-                return $response;
+                // Perform validation
+                $errors = [];
 
-            }
-            $updateStmt = 'UPDATE users SET ';
-            $params = [];
-            foreach ($requestBody as $key => $value) {
-                $updateStmt .= $key . ' = :' . $key . ', ';
-                $params[$key] = $value;
-            }
-            $updateStmt = rtrim($updateStmt, ', ') . ' WHERE id = :id';
-            $params['id'] = $userId;
+                if (isset($requestBody['username']) && empty($requestBody['username'])) {
+                    $errors['username'] = 'Username is required';
+                } elseif (isset($requestBody['username']) && !preg_match('/^[a-zA-Z]+$/', $requestBody['username'])) {
+                    $errors['username'] = 'Username should only contain letters';
+                }
 
-            // Prepare and execute the update statement
-            $stmt = $pdo->prepare($updateStmt);
-            $stmt->execute($params);
+                if (isset($requestBody['email']) && empty($requestBody['email'])) {
+                    $errors['email'] = 'Email is required';
+                } elseif (isset($requestBody['email']) && !filter_var($requestBody['email'], FILTER_VALIDATE_EMAIL)) {
+                    $errors['email'] = 'Invalid email format';
+                }
 
-            if ($stmt->rowCount() > 0) {
-                revokeToken($userId);
-                generateToken($userId,$requestBody['username'],$requestBody['role']);
+                if (isset($requestBody['password']) && strlen($requestBody['password']) < 6) {
+                    $errors['password'] = 'Password should be at least 6 characters long';
+                }
+
+                if (!empty($errors)) {
+                    // Handle validation errors
+                    $responseBody = json_encode(['errors' => $errors]);
+                    $response = $response->withHeader('Content-Type', 'application/json');
+                    $response = $response->withStatus(400);
+                    $response->getBody()->write($responseBody);
+                    return $response;
+                }
+
+                // Construct the update statement
+                $updateStmt = 'UPDATE users SET ';
+                $params = [];
+                foreach ($requestBody as $key => $value) {
+                    $updateStmt .= $key . ' = :' . $key . ', ';
+                    $params[$key] = $value;
+                }
+                $updateStmt = rtrim($updateStmt, ', ') . ' WHERE id = :id';
+                $params['id'] = $userId;
+
+                // Prepare and execute the update statement
+                $stmt = $pdo->prepare($updateStmt);
+                $stmt->execute($params);
+
+                if ($stmt->rowCount() > 0) {
+                    $message = [
+                        'message' => 'User updated successfully'
+                    ];
+                    $responseBody = json_encode($message);
+                    $response = $response->withHeader('Content-Type', 'application/json');
+                    $response->getBody()->write($responseBody);
+                    return $response;
+                }
+
                 $message = [
-                    'message' => 'User updated successfully'
+                    'errors' => ['username' => 'User update failed'],
                 ];
                 $responseBody = json_encode($message);
+
                 $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(404);
+                $response->getBody()->write($responseBody);
+                return $response;
+
+            } catch (PDOException $exception) {
+                // Handle any database-related errors
+                $responseBody = json_encode(['errors' => 'Database error']);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(500);
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-
-            $message = [
-                'message' => 'User update failed'
-            ];
-            $responseBody = json_encode($message);
-
-            $response = $response->withHeader('Content-Type', 'application/json');
-            $response = $response->withStatus(404);
-            $response->getBody()->write($responseBody);
-            return $response;
-
-            // Set headers to indicate JSON response
-
-
         })->add(verifyTokenAndAuthorization::class);
+
         $app->delete('/', function (Request $request, Response $response, $next) use ($pdo) {
             $userId = $request->getAttribute('userId');
 
@@ -386,7 +425,13 @@ return function (App $app) use ($pdo) {
             $validation = $validator->validate($requestBody, [
                 'title' => 'required|min:3',
                 'description' => 'required',
+                'discount' => 'required|numeric|min:0',
+                'stock' => 'required|numeric|min:0',
+                'price' => 'required|numeric|min:0',
+                'categories' => 'required|array|min:1',
+                'categories.*.id' => 'required|numeric',
                 'images' => 'required|array',
+                'images.*.url' => 'required|url',
             ]);
 
             $validation->validate();
@@ -422,7 +467,7 @@ return function (App $app) use ($pdo) {
             }
 
             $message = [
-                'message' => 'Failed to update category'
+                'errors' => ['category' => 'Failed to update category']
             ];
             $responseBody = json_encode($message);
             $response = $response->withHeader('Content-Type', 'application/json');
@@ -526,17 +571,19 @@ return function (App $app) use ($pdo) {
     });
     $app->group(('/product'), function ($app) use ($pdo) {
 
-        $app->post('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
+        $app->post('/', function (Request $request, Response $response, $next) use ($pdo) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
             $validation = $validator->validate($requestBody, [
                 'title' => 'required|min:3',
                 'description' => 'required',
-                'images' => 'required|array',
-                'price' => 'required|numeric',
-                'discount' => 'numeric',
-                'stock' => 'numeric',
-                'category_id' => 'required|numeric' // Add validation for category_id
+                'discount' => 'required|numeric|min:0',
+                'stock' => 'required|numeric|min:0',
+                'price' => 'required|numeric|min:0',
+                'categories' => 'required|array|min:1',
+                'categories.*.id' => 'required|numeric',
+                'images' => 'required|array|min:1',
+                'images.*.url' => 'required|url',
             ]);
 
             if ($validation->fails()) {
@@ -562,23 +609,21 @@ return function (App $app) use ($pdo) {
 
             if ($stmt->rowCount() > 0) {
                 $productID = $pdo->lastInsertId();
-                $stmt = $pdo->prepare("INSERT INTO product_categories (product_id, category_id) 
-                VALUES (:product_id, :category_id)");
 
-                $stmt->execute([
-                    'product_id' => $productID,
-                    'category_id' => $requestBody['category_id'],
-                ]);
-
-                if ($stmt->rowCount() > 0) {
-                    $message = [
-                        'message' => 'Product created successfully'
-                    ];
-                    $responseBody = json_encode($message);
-                    $response = $response->withHeader('Content-Type', 'application/json');
-                    $response->getBody()->write($responseBody);
-                    return $response;
+                // Insert the categories
+                $categories = $requestBody['categories'];
+                $stmt = $pdo->prepare("INSERT INTO product_categories (product_id, category_id) VALUES (:product_id, :category_id)");
+                foreach ($categories as $category) {
+                    $stmt->execute(['product_id' => $productID, 'category_id' => $category['id']]);
                 }
+
+                $message = [
+                    'message' => 'Product created successfully'
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response->getBody()->write($responseBody);
+                return $response;
             }
 
             $message = [
@@ -591,19 +636,23 @@ return function (App $app) use ($pdo) {
             return $response;
         })->add(verifyTokenAndAdmin::class);
 
+
         $app->put('/{id}', function (Request $request, Response $response, $args) use ($pdo) {
             $id = $args['id'];
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
-            $validation = $validator->validate($requestBody, [
-                'title' => 'required|min:3',
-                'description' => 'required',
-                'images' => 'required|array',
-                'price' => 'required|numeric',
-                'discount' => 'numeric',
-                'stock' => 'numeric',
-            ]);
-
+          // Define validation rules
+          $validation = $validator->validate($requestBody, [
+            'title' => 'required|min:3',
+            'description' => 'required',
+            'discount' => 'required|numeric|min:0',
+            'stock' => 'required|numeric|min:0',
+            'price' => 'required|numeric|min:0',
+            'categories' => 'required|array|min:1',
+            'categories.*.id' => 'required|numeric',
+            'images' => 'required|array|min:1',
+            'images.*.url' => 'required|url',
+        ]);
             $validation->validate();
 
             if ($validation->fails()) {
@@ -615,33 +664,60 @@ return function (App $app) use ($pdo) {
                 return $response;
             }
 
-            $stmt = $pdo->prepare("UPDATE products SET title = :title, description = :description, images = :images, price = :price, discount = :discount, stock = :stock WHERE id = :id");
-            $stmt->execute([
-                'id' => $id,
-                'title' => $requestBody['title'],
-                'description' => $requestBody['description'],
-                'images' => json_encode($requestBody['images']),
-                'price' => $requestBody['price'],
-                'discount' => $requestBody['discount'],
-                'stock' => $requestBody['stock'],
-            ]);
+            // Fetch the existing product data
+            $stmt = $pdo->prepare("SELECT * FROM products WHERE id = :id");
+            $stmt->execute(['id' => $id]);
+            $product = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if ($stmt->rowCount() > 0) {
-                $message = [
-                    'message' => 'Product updated successfully'
-                ];
-                $responseBody = json_encode($message);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response->getBody()->write($responseBody);
-                return $response;
+            // Update the columns only if they are present in the request and have changed
+            $updateData = [];
+            if (isset($requestBody['title']) && $requestBody['title'] !== $product['title']) {
+                $updateData['title'] = $requestBody['title'];
+            }
+            if (isset($requestBody['description']) && $requestBody['description'] !== $product['description']) {
+                $updateData['description'] = $requestBody['description'];
+            }
+            if (isset($requestBody['images']) && $requestBody['images'] !== $product['images']) {
+                $updateData['images'] = json_encode($requestBody['images']);
+            }
+            if (isset($requestBody['price']) && $requestBody['price'] !== $product['price']) {
+                $updateData['price'] = $requestBody['price'];
+            }
+            if (isset($requestBody['discount']) && $requestBody['discount'] !== $product['discount']) {
+                $updateData['discount'] = $requestBody['discount'];
+            }
+            if (isset($requestBody['stock']) && $requestBody['stock'] !== $product['stock']) {
+                $updateData['stock'] = $requestBody['stock'];
+            }
+
+            // Update the product if any changes are detected
+            if (!empty($updateData)) {
+                $placeholders = implode(', ', array_map(fn($column) => "$column = :$column", array_keys($updateData)));
+                $updateData['id'] = $id;
+
+                $stmt = $pdo->prepare("UPDATE products SET $placeholders WHERE id = :id");
+                $stmt->execute($updateData);
+            }
+
+            // Update the categories if provided
+            if (isset($requestBody['categories']) && is_array($requestBody['categories'])) {
+                // Delete existing categories for the product
+                $stmt = $pdo->prepare("DELETE FROM product_categories WHERE product_id = :id");
+                $stmt->execute(['id' => $id]);
+
+                // Insert the updated categories
+                $categories = $requestBody['categories'];
+                $stmt = $pdo->prepare("INSERT INTO product_categories (product_id, category_id) VALUES (:product_id, :category_id)");
+                foreach ($categories as $category) {
+                    $stmt->execute(['product_id' => $id, 'category_id' => $category['id']]);
+                }
             }
 
             $message = [
-                'message' => 'Failed to update product'
+                'message' => 'Product updated successfully'
             ];
             $responseBody = json_encode($message);
             $response = $response->withHeader('Content-Type', 'application/json');
-            $response = $response->withStatus(500);
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAdmin::class);
@@ -664,6 +740,7 @@ return function (App $app) use ($pdo) {
             $stmt->execute([
                 'product_id' => $id,
             ]);
+
             if ($stmt->rowCount() > 0) {
                 $stmt = $pdo->prepare("DELETE FROM products WHERE id = :id");
                 $stmt->execute([
@@ -702,7 +779,7 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAdmin::class);
 
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
-            $stmt = $pdo->prepare("SELECT p.*, c.title AS category_title
+            $stmt = $pdo->prepare("SELECT p.*, c.title AS category_title, c.id AS category_id
                           FROM products p
                           LEFT JOIN product_categories pc ON p.id = pc.product_id
                           LEFT JOIN categories c ON pc.category_id = c.id");
@@ -714,6 +791,7 @@ return function (App $app) use ($pdo) {
             foreach ($products as $product) {
                 $productId = $product['id'];
                 $categoryTitle = $product['category_title'];
+                $categoryId = $product['category_id'];
 
                 // If the product doesn't exist in the formattedProducts array, add it
                 if (!isset($formattedProducts[$productId])) {
@@ -731,7 +809,10 @@ return function (App $app) use ($pdo) {
 
                 // If a category title is associated with the product, add it to the categories array
                 if ($categoryTitle) {
-                    $formattedProducts[$productId]['categories'][] = $categoryTitle;
+                    $formattedProducts[$productId]['categories'][] = [
+                        'title' => $categoryTitle,
+                        'id' => $categoryId
+                    ];
                 }
             }
 
@@ -1331,7 +1412,6 @@ return function (App $app) use ($pdo) {
     $app->post('/upload', function ($request, $response) {
         try {
             $uploadedFiles = $request->getUploadedFiles();
-
             if (!isset($uploadedFiles['image'])) {
                 throw new Exception('No file uploaded.');
             }

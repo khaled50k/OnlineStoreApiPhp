@@ -14,8 +14,8 @@ class verifyTokenAndAdmin
     {
         $cookies = $request->getCookieParams();
         $token = $cookies['PHPSESSION'] ?? null;
-        
-    if (!$token) {
+
+        if (!$token) {
             $response = new Response();
             $message = [
                 'message' => 'You are not authenticated.',
@@ -63,7 +63,7 @@ class userDataByToken
     {
         $cookies = $request->getCookieParams();
         $token = $cookies['PHPSESSION'] ?? null;
-    if (!$token) {
+        if (!$token) {
             $response = new Response();
             $message = [
                 'message' => 'You are not authenticated.',
@@ -103,7 +103,7 @@ class verifyTokenAndAuthorization
         $cookies = $request->getCookieParams();
         $token = $cookies['PHPSESSION'] ?? null;
         $queryParams = $request->getQueryParams();
-        $userId = $queryParams['userid'] ?$queryParams['userid'] :$args['user_id'];
+        $userId = $queryParams['userid'] ? $queryParams['userid'] : $args['user_id'];
 
 
         if (!$token) {
