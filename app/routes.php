@@ -869,7 +869,7 @@ return function (App $app) use ($pdo) {
     });
     $app->group(('/cart'), function ($app) use ($pdo) {
 
-        $app->post('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
+        $app->post('/', function (Request $request, Response $response, $next) use ($pdo) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
             $validation = $validator->validate($requestBody, [
@@ -993,7 +993,7 @@ return function (App $app) use ($pdo) {
             return $response;
         })->add(verifyTokenAndAuthorization::class);
 
-        $app->put('/{cart_id}', function (Request $request, Response $response, $args) use ($pdo, $validator) {
+        $app->put('/{cart_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $cartId = $args['cart_id'];
             $requestBody = json_decode($request->getBody()->getContents(), true);
 
@@ -1288,40 +1288,57 @@ return function (App $app) use ($pdo) {
             $stmt = $pdo->prepare("SELECT * FROM carts");
             $stmt->execute();
             $carts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+        
             // Create an empty array to hold the grouped carts
             $groupedCarts = [];
-
+        
             // Iterate over each cart
             foreach ($carts as $cart) {
                 $cartId = $cart['id'];
-
+        
                 // Retrieve the cart items for the current cart
-                $stmt = $pdo->prepare("SELECT ci.quantity, p.title ,ci.id as cart_item_id,p.id  as product_id
+                $stmt = $pdo->prepare("SELECT ci.quantity, p.title, ci.id as cart_item_id, p.id as product_id, p.price, p.discount
                                        FROM cart_items ci
                                        INNER JOIN products p ON ci.product_id = p.id
                                        WHERE ci.cart_id = :cart_id");
                 $stmt->execute(['cart_id' => $cartId]);
                 $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+        
                 // Assign the cart items to the current cart
                 $cart['items'] = $cartItems;
-
+        
+                // Calculate the total amount for the current cart
+                $totalAmount = 0;
+                $totalDiscount = 0;
+                foreach ($cartItems as $item) {
+                    $subtotal = $item['quantity'] * $item['price'] * (1 - $item['discount'] / 100);
+                    $totalAmount += $subtotal;
+                    $totalDiscount += ($subtotal * $item['discount'] / 100);
+                }
+                $cart['total_amount'] = $totalAmount;
+                $cart['total_discount'] = $totalDiscount;
+        
                 // Group the cart by user_id
                 $userId = $cart['user_id'];
                 if (!isset($groupedCarts[$userId])) {
                     $groupedCarts[$userId] = [];
                 }
-                $groupedCarts[$userId][] = $cart;
+                $groupedCarts[$userId] = $cart;
             }
-
+        
             // Create the response JSON
-            $responseBody = json_encode(['carts' => $groupedCarts]);
+            $responseCarts = [];
+            foreach ($groupedCarts as $userId => $carts) {
+                $responseCarts['cart'] = $carts;
+            }
+        
+            $responseBody = json_encode(['carts' => $responseCarts]);
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAuthorization::class);
-
+        
+        
         $app->get('/user/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];
 
