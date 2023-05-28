@@ -1297,7 +1297,7 @@ return function (App $app) use ($pdo) {
                 $cartId = $cart['id'];
         
                 // Retrieve the cart items for the current cart
-                $stmt = $pdo->prepare("SELECT ci.quantity, p.title, ci.id as cart_item_id, p.id as product_id, p.price, p.discount
+                $stmt = $pdo->prepare("SELECT ci.quantity, p.title,ci.id as item_id,p.images as product_images, p.description as product_description, ci.id as cart_item_id, p.id as product_id, p.price, p.discount
                                        FROM cart_items ci
                                        INNER JOIN products p ON ci.product_id = p.id
                                        WHERE ci.cart_id = :cart_id");
@@ -1305,16 +1305,22 @@ return function (App $app) use ($pdo) {
                 $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
                 // Assign the cart items to the current cart
+                foreach ($cartItems as &$item) {
+                    $item['product_images'] = json_decode($item['product_images'], true);
+                }
                 $cart['items'] = $cartItems;
-        
-                // Calculate the total amount for the current cart
+
+                // Calculate the total amount and total price for each item in the current cart
                 $totalAmount = 0;
                 $totalDiscount = 0;
-                foreach ($cartItems as $item) {
+                foreach ($cartItems as &$item) {
                     $subtotal = $item['quantity'] * $item['price'] * (1 - $item['discount'] / 100);
                     $totalAmount += $subtotal;
                     $totalDiscount += ($subtotal * $item['discount'] / 100);
+                    $item['total_price'] = $subtotal;
                 }
+                unset($item); // Unset the reference to the last item
+        
                 $cart['total_amount'] = $totalAmount;
                 $cart['total_discount'] = $totalDiscount;
         
