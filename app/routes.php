@@ -26,7 +26,6 @@ return function (App $app) use ($pdo) {
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? ");
             $stmt->execute([$email]);
             $user = $stmt->fetch();
-
             if ($user['status'] === 'inactive') {
                 $response = $response->withHeader('Content-Type', 'application/json');
 
@@ -55,6 +54,8 @@ return function (App $app) use ($pdo) {
             }
 
             if ($user && password_verify($password, $user['password'])) {
+                // ... your existing code ...
+
                 $id = $user['id'];
                 $username = $user['username'];
                 $role = $user['role'];
@@ -75,14 +76,11 @@ return function (App $app) use ($pdo) {
                     'message' => 'Invalid email or password',
                 ];
                 $responseBody = json_encode($message);
-                $response->withStatus(401);
+                $response = $response->withStatus(401); // Update the status code to 401
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-
         });
-
-
         $app->post('/register', function (Request $request, Response $response) use ($pdo) {
 
 
@@ -149,6 +147,28 @@ return function (App $app) use ($pdo) {
             $response = $response->withStatus(200);
             return $response;
         });
+        $app->post('/logout/{user_id}', function (Request $request, Response $response) use ($pdo) {
+            $userId = $request->getAttribute('userId');
+
+            if (revokeToken($userId)) {
+
+                $message = [
+                    'message' => 'Logout successfully'
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response->getBody()->write($responseBody);
+                return $response;
+            }
+
+            $message = [
+                'error' => 'Logout error'
+            ];
+            $responseBody = json_encode($message);
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response->getBody()->write($responseBody);
+            return $response;
+        })->add(verifyTokenAndAuthorization::class);
     });
     $app->group('/user', function ($app) use ($pdo) {
 
@@ -479,7 +499,8 @@ return function (App $app) use ($pdo) {
 
         $app->delete('/{id}', function (Request $request, Response $response, $args) use ($pdo) {
             $id = $args['id'];
-
+        
+            // Validate ID parameter
             if (!$id) {
                 $message = [
                     'message' => 'Category ID is required'
@@ -490,18 +511,22 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-            $stmt = $pdo->prepare("DELETE FROM product_categories WHERE category_id = :category_id");
-            $stmt->execute([
-                'category_id' => $id,
-            ]);
-
-            if ($stmt->rowCount() > 0) {
-
+        
+            try {
+                $pdo->beginTransaction();
+        
+                $stmt = $pdo->prepare("DELETE FROM product_categories WHERE category_id = :category_id");
+                $stmt->execute([
+                    'category_id' => $id,
+                ]);
+        
                 $stmt = $pdo->prepare("DELETE FROM categories WHERE id = :id");
                 $stmt->execute([
                     'id' => $id,
                 ]);
+        
                 if ($stmt->rowCount() > 0) {
+                    $pdo->commit();
                     $message = [
                         'message' => 'Category deleted successfully'
                     ];
@@ -509,10 +534,21 @@ return function (App $app) use ($pdo) {
                     $response = $response->withHeader('Content-Type', 'application/json');
                     $response->getBody()->write($responseBody);
                     return $response;
-
+                } else {
+                    $pdo->rollBack();
+                    $message = [
+                        'message' => 'Failed to delete category'
+                    ];
+                    $responseBody = json_encode($message);
+                    $response = $response->withHeader('Content-Type', 'application/json');
+                    $response = $response->withStatus(500);
+                    $response->getBody()->write($responseBody);
+                    return $response;
                 }
+            } catch (Exception $e) {
+                $pdo->rollBack();
                 $message = [
-                    'message' => 'Failed to delete category'
+                    'message' => 'An error occurred while deleting the category'
                 ];
                 $responseBody = json_encode($message);
                 $response = $response->withHeader('Content-Type', 'application/json');
@@ -520,16 +556,8 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-
-            $message = [
-                'message' => 'Failed to delete category'
-            ];
-            $responseBody = json_encode($message);
-            $response = $response->withHeader('Content-Type', 'application/json');
-            $response = $response->withStatus(500);
-            $response->getBody()->write($responseBody);
-            return $response;
         })->add(verifyTokenAndAdmin::class);
+        
 
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
             $stmt = $pdo->query("SELECT * FROM categories");
@@ -641,18 +669,18 @@ return function (App $app) use ($pdo) {
             $id = $args['id'];
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
-          // Define validation rules
-          $validation = $validator->validate($requestBody, [
-            'title' => 'required|min:3',
-            'description' => 'required',
-            'discount' => 'required|numeric|min:0',
-            'stock' => 'required|numeric|min:0',
-            'price' => 'required|numeric|min:0',
-            'categories' => 'required|array|min:1',
-            'categories.*.id' => 'required|numeric',
-            'images' => 'required|array|min:1',
-            'images.*.url' => 'required|url',
-        ]);
+            // Define validation rules
+            $validation = $validator->validate($requestBody, [
+                'title' => 'required|min:3',
+                'description' => 'required',
+                'discount' => 'required|numeric|min:0',
+                'stock' => 'required|numeric|min:0',
+                'price' => 'required|numeric|min:0',
+                'categories' => 'required|array|min:1',
+                'categories.*.id' => 'required|numeric',
+                'images' => 'required|array|min:1',
+                'images.*.url' => 'required|url',
+            ]);
             $validation->validate();
 
             if ($validation->fails()) {
@@ -1288,14 +1316,14 @@ return function (App $app) use ($pdo) {
             $stmt = $pdo->prepare("SELECT * FROM carts");
             $stmt->execute();
             $carts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
             // Create an empty array to hold the grouped carts
             $groupedCarts = [];
-        
+
             // Iterate over each cart
             foreach ($carts as $cart) {
                 $cartId = $cart['id'];
-        
+
                 // Retrieve the cart items for the current cart
                 $stmt = $pdo->prepare("SELECT ci.quantity, p.title,ci.id as item_id,p.images as product_images, p.description as product_description, ci.id as cart_item_id, p.id as product_id, p.price, p.discount
                                        FROM cart_items ci
@@ -1303,7 +1331,7 @@ return function (App $app) use ($pdo) {
                                        WHERE ci.cart_id = :cart_id");
                 $stmt->execute(['cart_id' => $cartId]);
                 $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
                 // Assign the cart items to the current cart
                 foreach ($cartItems as &$item) {
                     $item['product_images'] = json_decode($item['product_images'], true);
@@ -1320,10 +1348,10 @@ return function (App $app) use ($pdo) {
                     $item['total_price'] = $subtotal;
                 }
                 unset($item); // Unset the reference to the last item
-        
+
                 $cart['total_amount'] = $totalAmount;
                 $cart['total_discount'] = $totalDiscount;
-        
+
                 // Group the cart by user_id
                 $userId = $cart['user_id'];
                 if (!isset($groupedCarts[$userId])) {
@@ -1331,20 +1359,20 @@ return function (App $app) use ($pdo) {
                 }
                 $groupedCarts[$userId] = $cart;
             }
-        
+
             // Create the response JSON
             $responseCarts = [];
             foreach ($groupedCarts as $userId => $carts) {
                 $responseCarts['cart'] = $carts;
             }
-        
+
             $responseBody = json_encode(['carts' => $responseCarts]);
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAuthorization::class);
-        
-        
+
+
         $app->get('/user/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];
 
