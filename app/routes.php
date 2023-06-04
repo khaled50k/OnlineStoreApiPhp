@@ -219,8 +219,6 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAuthorization::class);
         $app->put('/', function (Request $request, Response $response, $next) use ($pdo) {
             try {
-
-
                 $requestBody = json_decode($request->getBody()->getContents(), true);
                 $email = $requestBody['email'];
                 $password = $requestBody['password'];
@@ -305,6 +303,7 @@ return function (App $app) use ($pdo) {
                 $stmt->execute($params);
 
                 if ($stmt->rowCount() > 0) {
+                    revokeToken($userId);
                     $message = [
                         'message' => 'User updated successfully'
                     ];
@@ -499,7 +498,7 @@ return function (App $app) use ($pdo) {
 
         $app->delete('/{id}', function (Request $request, Response $response, $args) use ($pdo) {
             $id = $args['id'];
-        
+
             // Validate ID parameter
             if (!$id) {
                 $message = [
@@ -511,20 +510,20 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-        
+
             try {
                 $pdo->beginTransaction();
-        
+
                 $stmt = $pdo->prepare("DELETE FROM product_categories WHERE category_id = :category_id");
                 $stmt->execute([
                     'category_id' => $id,
                 ]);
-        
+
                 $stmt = $pdo->prepare("DELETE FROM categories WHERE id = :id");
                 $stmt->execute([
                     'id' => $id,
                 ]);
-        
+
                 if ($stmt->rowCount() > 0) {
                     $pdo->commit();
                     $message = [
@@ -557,7 +556,7 @@ return function (App $app) use ($pdo) {
                 return $response;
             }
         })->add(verifyTokenAndAdmin::class);
-        
+
 
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
             $stmt = $pdo->query("SELECT * FROM categories");
@@ -1028,7 +1027,7 @@ return function (App $app) use ($pdo) {
             // Validate the request body
             $validator = new Validator;
             $validation = $validator->validate($requestBody, [
-                'items' => 'required|array',
+                // 'items' => 'required|array',
             ]);
             $items = $requestBody['items'];
 
@@ -1310,7 +1309,56 @@ return function (App $app) use ($pdo) {
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAuthorization::class);
-
+        $app->delete('/cart_item/{cart_item_id}', function (Request $request, Response $response, $args) use ($pdo) {
+            $cartItemId = $args['cart_item_id'];
+        
+            // Check if the cart item exists
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM cart_items WHERE id = :cart_item_id");
+            $stmt->execute(['cart_item_id' => $cartItemId]);
+            $cartItemExists = (int) $stmt->fetchColumn();
+        
+            if ($cartItemExists === 0) {
+                // Return an error response if the cart item does not exist
+                $message = [
+                    'error' => 'Cart item does not exist'
+                ];
+                $responseBody = json_encode($message);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(404);
+                $response->getBody()->write($responseBody);
+                return $response;
+            }
+        
+            // Retrieve the cart item details
+            $stmt = $pdo->prepare("SELECT product_id, quantity, cart_id FROM cart_items WHERE id = :cart_item_id");
+            $stmt->execute(['cart_item_id' => $cartItemId]);
+            $cartItem = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+            $productId = $cartItem['product_id'];
+            $quantity = $cartItem['quantity'];
+            $cartId = $cartItem['cart_id'];
+        
+            // Delete the cart item from the database
+            $stmt = $pdo->prepare("DELETE FROM cart_items WHERE id = :cart_item_id");
+            $stmt->execute(['cart_item_id' => $cartItemId]);
+        
+            // Return the quantity of the cart item back to the product stock
+            $stmt = $pdo->prepare("UPDATE products SET stock = stock + :quantity WHERE id = :product_id");
+            $stmt->execute([
+                'quantity' => $quantity,
+                'product_id' => $productId
+            ]);
+        
+            // Return a success response
+            $message = [
+                'message' => 'Cart item deleted successfully'
+            ];
+            $responseBody = json_encode($message);
+            $response = $response->withHeader('Content-Type', 'application/json');
+            $response->getBody()->write($responseBody);
+            return $response;
+        })->add(verifyTokenAndAuthorization::class);
+        
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
             // Retrieve all carts
             $stmt = $pdo->prepare("SELECT * FROM carts");
@@ -1376,46 +1424,61 @@ return function (App $app) use ($pdo) {
         $app->get('/user/{user_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $userId = $args['user_id'];
 
-            // Check if the user exists
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = :user_id");
-            $stmt->execute(['user_id' => $userId]);
-            $userExists = (int) $stmt->fetchColumn();
 
-            if ($userExists === 0) {
-                // Return an error response if the user doesn't exist
-                $message = [
-                    'error' => 'User does not exist'
-                ];
-                $responseBody = json_encode($message);
-                $response = $response->withHeader('Content-Type', 'application/json');
-                $response = $response->withStatus(404);
-                $response->getBody()->write($responseBody);
-                return $response;
-            }
-
-            // Retrieve all carts for the given user_id
+            // Retrieve carts for the specified user ID
             $stmt = $pdo->prepare("SELECT * FROM carts WHERE user_id = :user_id");
             $stmt->execute(['user_id' => $userId]);
             $carts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // Create an empty array to hold the grouped carts
+            $groupedCarts = [];
+
             // Iterate over each cart
-            foreach ($carts as &$cart) {
+            foreach ($carts as $cart) {
                 $cartId = $cart['id'];
 
                 // Retrieve the cart items for the current cart
-                $stmt = $pdo->prepare("SELECT ci.quantity, p.title,ci.id as cart_item_id,p.id  as product_id
-                                       FROM cart_items ci
-                                       INNER JOIN products p ON ci.product_id = p.id
-                                       WHERE ci.cart_id = :cart_id");
+                $stmt = $pdo->prepare("SELECT ci.quantity, p.title, ci.id as item_id, p.images as product_images, p.description as product_description, ci.id as cart_item_id, p.id as product_id, p.price, p.discount
+                               FROM cart_items ci
+                               INNER JOIN products p ON ci.product_id = p.id
+                               WHERE ci.cart_id = :cart_id");
                 $stmt->execute(['cart_id' => $cartId]);
                 $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                 // Assign the cart items to the current cart
+                foreach ($cartItems as &$item) {
+                    $item['product_images'] = json_decode($item['product_images'], true);
+                }
                 $cart['items'] = $cartItems;
+
+                // Calculate the total amount and total price for each item in the current cart
+                $totalAmount = 0;
+                $totalDiscount = 0;
+                foreach ($cartItems as &$item) {
+                    $subtotal = $item['quantity'] * $item['price'] * (1 - $item['discount'] / 100);
+                    $totalAmount += $subtotal;
+                    $totalDiscount += ($subtotal * $item['discount'] / 100);
+                    $item['total_price'] = $subtotal;
+                }
+                unset($item); // Unset the reference to the last item
+
+                $cart['total_amount'] = $totalAmount;
+                $cart['total_discount'] = $totalDiscount;
+
+                // Group the cart by user_id
+                if (!isset($groupedCarts[$userId])) {
+                    $groupedCarts[$userId] = [];
+                }
+                $groupedCarts[$userId] = $cart;
             }
 
             // Create the response JSON
-            $responseBody = json_encode(['carts' => $carts]);
+            $responseCarts = [];
+            foreach ($groupedCarts as $userId => $carts) {
+                $responseCarts= $carts;
+            }
+
+            $responseBody = json_encode(['cart' => $responseCarts]);
             $response = $response->withHeader('Content-Type', 'application/json');
             $response->getBody()->write($responseBody);
             return $response;
