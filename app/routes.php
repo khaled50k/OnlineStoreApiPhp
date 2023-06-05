@@ -1030,7 +1030,6 @@ return function (App $app) use ($pdo) {
                 // 'items' => 'required|array',
             ]);
             $items = $requestBody['items'];
-
             if ($validation->fails()) {
                 $errors = $validation->errors()->firstOfAll();
                 $responseBody = json_encode(['errors' => $errors]);
