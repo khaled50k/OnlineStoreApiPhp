@@ -134,6 +134,10 @@ class verifyTokenAndAuthorization
         if ($res['role'] === 'admin' || $res['id'] == $userId) {
 
             $request = $request->withAttribute('userId', $userId);
+            if($res['id']==$userId){
+                
+                $request = $request->withAttribute('isUser', true);
+            }
             $response = $handler->handle($request);
             return $response;
         }

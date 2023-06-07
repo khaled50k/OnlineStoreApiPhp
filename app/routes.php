@@ -28,7 +28,6 @@ return function (App $app) use ($pdo) {
             $user = $stmt->fetch();
             if ($user['status'] === 'inactive') {
                 $response = $response->withHeader('Content-Type', 'application/json');
-
                 $message = [
                     'message' => 'Your account is inactive.',
                 ];
@@ -36,7 +35,6 @@ return function (App $app) use ($pdo) {
                 $response->withStatus(401);
                 $response->getBody()->write($responseBody);
                 return $response;
-
             }
 
             if ($user && $user['deleted'] === 1) {
@@ -66,8 +64,7 @@ return function (App $app) use ($pdo) {
                 ];
                 $response = $response->withHeader('Content-Type', 'application/json');
                 $responseBody = json_encode($message);
-                $response->withStatus(401);
-                $response->getBody()->write($responseBody);
+
                 return $response;
             } else {
                 $response = $response->withHeader('Content-Type', 'application/json');
@@ -184,6 +181,7 @@ return function (App $app) use ($pdo) {
             return $response;
 
         })->add(verifyTokenAndAdmin::class);
+
         $app->get('/userdetails', function (Request $request, Response $response) use ($pdo) {
             $responseBody = json_encode($request->getAttribute('user'));
             $response->getBody()->write($responseBody);
@@ -219,6 +217,9 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAuthorization::class);
         $app->put('/', function (Request $request, Response $response, $next) use ($pdo) {
             try {
+
+                $isUser = $request->getAttribute('isUser');
+
                 $requestBody = json_decode($request->getBody()->getContents(), true);
                 $email = $requestBody['email'];
                 $password = $requestBody['password'];
@@ -248,7 +249,7 @@ return function (App $app) use ($pdo) {
                 $existingDataStmt->execute([$userId]);
                 $existingData = $existingDataStmt->fetch(PDO::FETCH_ASSOC);
 
-                // Check if a new password is provided in the request body
+                // Check if 'a' new password is provided in the request body
                 if (isset($requestBody['password']) && !empty($requestBody['password'])) {
                     // Update the password
                     $requestBody['password'] = password_hash($requestBody['password'], PASSWORD_DEFAULT);
@@ -265,7 +266,7 @@ return function (App $app) use ($pdo) {
 
                 if (isset($requestBody['username']) && empty($requestBody['username'])) {
                     $errors['username'] = 'Username is required';
-                } elseif (isset($requestBody['username']) && !preg_match('/^[a-zA-Z]+$/', $requestBody['username'])) {
+                } else if (isset($requestBody['username']) && !preg_match('/^[a-zA-Z]+$/', $requestBody['username'])) {
                     $errors['username'] = 'Username should only contain letters';
                 }
 
@@ -304,6 +305,13 @@ return function (App $app) use ($pdo) {
 
                 if ($stmt->rowCount() > 0) {
                     revokeToken($userId);
+                    if ($isUser) {
+                        # code...
+                        $res = generateToken($userId, $requestBody['username'], $requestBody['role']);
+
+                        $response = $response->withHeader('Set-Cookie', 'PHPSESSION=' . $res['token'] . '; Path= /' . '; expires=' . gmdate('D, d M Y H:i:s \G\M\T', $res['exp']));
+
+                    }
                     $message = [
                         'message' => 'User updated successfully'
                     ];
@@ -387,7 +395,7 @@ return function (App $app) use ($pdo) {
     });
     $app->group(('/category'), function ($app) use ($pdo) {
 
-        $app->post('/', function (Request $request, Response $response, $next) use ($pdo, $validator) {
+        $app->post('/', function (Request $request, Response $response, $next) use ($pdo) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $validator = new Validator;
             // Define validation rules
@@ -444,11 +452,6 @@ return function (App $app) use ($pdo) {
             $validation = $validator->validate($requestBody, [
                 'title' => 'required|min:3',
                 'description' => 'required',
-                'discount' => 'required|numeric|min:0',
-                'stock' => 'required|numeric|min:0',
-                'price' => 'required|numeric|min:0',
-                'categories' => 'required|array|min:1',
-                'categories.*.id' => 'required|numeric',
                 'images' => 'required|array',
                 'images.*.url' => 'required|url',
             ]);
@@ -719,9 +722,13 @@ return function (App $app) use ($pdo) {
 
             // Update the product if any changes are detected
             if (!empty($updateData)) {
+                // Create a string of column placeholders for the update query
                 $placeholders = implode(', ', array_map(fn($column) => "$column = :$column", array_keys($updateData)));
+
+                // Add the 'id' column to the update data array
                 $updateData['id'] = $id;
 
+                // Prepare and execute the update query
                 $stmt = $pdo->prepare("UPDATE products SET $placeholders WHERE id = :id");
                 $stmt->execute($updateData);
             }
@@ -917,8 +924,6 @@ return function (App $app) use ($pdo) {
                 return $response;
             }
 
-            // Keep track of the products and quantities to be updated in a separate array
-            $productsToUpdate = [];
 
             // Check if the user already has a cart
             $stmt = $pdo->prepare("SELECT id FROM carts WHERE user_id = :user_id");
@@ -1002,12 +1007,6 @@ return function (App $app) use ($pdo) {
                     'new_stock' => $newStock,
                     'product_id' => $productId
                 ]);
-
-                // Add the product and its quantity to the productsToUpdate array
-                $productsToUpdate[] = [
-                    'product_id' => $productId,
-                    'quantity' => $newquantity
-                ];
             }
 
             // Return a success response
@@ -1310,12 +1309,12 @@ return function (App $app) use ($pdo) {
         })->add(verifyTokenAndAuthorization::class);
         $app->delete('/cart_item/{cart_item_id}', function (Request $request, Response $response, $args) use ($pdo) {
             $cartItemId = $args['cart_item_id'];
-        
+
             // Check if the cart item exists
             $stmt = $pdo->prepare("SELECT COUNT(*) FROM cart_items WHERE id = :cart_item_id");
             $stmt->execute(['cart_item_id' => $cartItemId]);
             $cartItemExists = (int) $stmt->fetchColumn();
-        
+
             if ($cartItemExists === 0) {
                 // Return an error response if the cart item does not exist
                 $message = [
@@ -1327,27 +1326,27 @@ return function (App $app) use ($pdo) {
                 $response->getBody()->write($responseBody);
                 return $response;
             }
-        
+
             // Retrieve the cart item details
             $stmt = $pdo->prepare("SELECT product_id, quantity, cart_id FROM cart_items WHERE id = :cart_item_id");
             $stmt->execute(['cart_item_id' => $cartItemId]);
             $cartItem = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
             $productId = $cartItem['product_id'];
             $quantity = $cartItem['quantity'];
             $cartId = $cartItem['cart_id'];
-        
+
             // Delete the cart item from the database
             $stmt = $pdo->prepare("DELETE FROM cart_items WHERE id = :cart_item_id");
             $stmt->execute(['cart_item_id' => $cartItemId]);
-        
+
             // Return the quantity of the cart item back to the product stock
             $stmt = $pdo->prepare("UPDATE products SET stock = stock + :quantity WHERE id = :product_id");
             $stmt->execute([
                 'quantity' => $quantity,
                 'product_id' => $productId
             ]);
-        
+
             // Return a success response
             $message = [
                 'message' => 'Cart item deleted successfully'
@@ -1357,7 +1356,7 @@ return function (App $app) use ($pdo) {
             $response->getBody()->write($responseBody);
             return $response;
         })->add(verifyTokenAndAuthorization::class);
-        
+
         $app->get('/', function (Request $request, Response $response) use ($pdo) {
             // Retrieve all carts
             $stmt = $pdo->prepare("SELECT * FROM carts");
@@ -1474,7 +1473,7 @@ return function (App $app) use ($pdo) {
             // Create the response JSON
             $responseCarts = [];
             foreach ($groupedCarts as $userId => $carts) {
-                $responseCarts= $carts;
+                $responseCarts = $carts;
             }
 
             $responseBody = json_encode(['cart' => $responseCarts]);
@@ -1562,14 +1561,21 @@ return function (App $app) use ($pdo) {
     // Helper function to move the uploaded file to a specific directory
     function moveUploadedFile($directory, $uploadedFile)
     {
+        // Get the file extension from the uploaded file
         $extension = pathinfo($uploadedFile->getClientFilename(), PATHINFO_EXTENSION);
-        $basename = bin2hex(random_bytes(8)); // Generate a unique filename
+    
+        // Generate a unique filename using random bytes
+        $basename = bin2hex(random_bytes(8));
+    
+        // Create the final filename by combining the basename and extension
         $filename = sprintf('%s.%0.8s', $basename, $extension);
-
+    
+        // Move the uploaded file to the specified directory with the new filename
         $uploadedFile->moveTo($directory . DIRECTORY_SEPARATOR . $filename);
-
+    
+        // Return the URL of the uploaded file
         return "http://localhost/e-commerce-php/app/upload/$filename";
     };
-
+    
 
 };
