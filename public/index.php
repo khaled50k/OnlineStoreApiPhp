@@ -10,9 +10,9 @@ require __DIR__ . '/../vendor/autoload.php';
 $app = AppFactory::create();
 
 $app->addErrorMiddleware(true, true, true);
-// $app->options('/{routes:.+}', function ($request, $response, $args) {
-//     return $response;
-// });
+$app->options('/{routes:.+}', function ($request, $response, $args) {
+    return $response;
+});
 $app->add(function ($request, $handler) {
     $response = $handler->handle($request);
     // Add CORS headers

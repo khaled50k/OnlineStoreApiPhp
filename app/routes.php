@@ -22,14 +22,29 @@ return function (App $app) use ($pdo) {
             $requestBody = json_decode($request->getBody()->getContents(), true);
             $email = $requestBody['email'];
             $password = $requestBody['password'];
+            $validator = new Validator;
+            $validation = $validator->validate($requestBody, [
+                'email' => 'required|email',
+                'password' => 'required',
+            ]);
+            $validation->validate();
+            if ($validation->fails()) {
+                $errors = $validation->errors()->firstOfAll();
+                // Handle validation errors
+                $responseBody = json_encode(['errors' => $errors]);
+                $response = $response->withHeader('Content-Type', 'application/json');
+                $response = $response->withStatus(400);
+                $response->getBody()->write($responseBody);
+                return $response;
 
+            }
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? ");
             $stmt->execute([$email]);
             $user = $stmt->fetch();
             if ($user['status'] === 'inactive') {
                 $response = $response->withHeader('Content-Type', 'application/json');
                 $message = [
-                    'message' => 'Your account is inactive.',
+                    'errors' => ['email' => 'Your account is inactive.'],
                 ];
                 $responseBody = json_encode($message);
                 $response->withStatus(401);
@@ -40,9 +55,8 @@ return function (App $app) use ($pdo) {
             if ($user && $user['deleted'] === 1) {
 
                 $response = $response->withHeader('Content-Type', 'application/json');
-
                 $message = [
-                    'message' => 'Your account is deleted.',
+                    'errors' => ['email' => 'Your account is deleted.'],
                 ];
                 $responseBody = json_encode($message);
                 $response->withStatus(401);
@@ -64,13 +78,12 @@ return function (App $app) use ($pdo) {
                 ];
                 $response = $response->withHeader('Content-Type', 'application/json');
                 $responseBody = json_encode($message);
-
+                $response->getBody()->write($responseBody);
                 return $response;
             } else {
                 $response = $response->withHeader('Content-Type', 'application/json');
-
                 $message = [
-                    'message' => 'Invalid email or password',
+                    'errors' => ['password' => 'Invalid email or password'],
                 ];
                 $responseBody = json_encode($message);
                 $response = $response->withStatus(401); // Update the status code to 401
@@ -1533,7 +1546,7 @@ return function (App $app) use ($pdo) {
             if ($uploadedFile->getError() !== UPLOAD_ERR_OK) {
                 throw new Exception('Error uploading file.');
             }
-
+            // path for project + app/upload
             $directory = 'C:\xampp\htdocs\e-commerce-php\app\upload';
             $filename = moveUploadedFile($directory, $uploadedFile);
 
@@ -1563,19 +1576,19 @@ return function (App $app) use ($pdo) {
     {
         // Get the file extension from the uploaded file
         $extension = pathinfo($uploadedFile->getClientFilename(), PATHINFO_EXTENSION);
-    
+
         // Generate a unique filename using random bytes
         $basename = bin2hex(random_bytes(8));
-    
+
         // Create the final filename by combining the basename and extension
         $filename = sprintf('%s.%0.8s', $basename, $extension);
-    
+
         // Move the uploaded file to the specified directory with the new filename
         $uploadedFile->moveTo($directory . DIRECTORY_SEPARATOR . $filename);
-    
+
         // Return the URL of the uploaded file
         return "http://localhost/e-commerce-php/app/upload/$filename";
     };
-    
+
 
 };
